@@ -214,7 +214,13 @@ class FullyConnectedNet(object):
         # beta2, etc. Scale parameters should be initialized to ones and shift     #
         # parameters should be initialized to zeros.                               #
         ############################################################################
-
+        dims = [input_dim] + hidden_dims + [num_classes]
+        for i in range(1, len(dims)):
+            self.params[f'W{i}'] = weight_scale * np.random.randn(dims[i-1], dims[i])
+            self.params[f'b{i}'] = np.zeros(dims[i])
+            if self.normalization == 'batchnorm' and i < len(dims) - 1:
+                self.params[f'gamma{i}'] = np.ones(dims[i])
+                self.params[f'beta{i}'] = np.zeros(dims[i])
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -284,6 +290,32 @@ class FullyConnectedNet(object):
         # self.bn_params[1] to the forward pass for the second batch normalization #
         # layer, etc.                                                              #
         ############################################################################
+        out = X
+        caches = {}
+
+        for i in range(1, self.num_layers):
+            W = self.params[f'W{i}']
+            b = self.params[f'b{i}']
+            
+            # 1. Affine
+            out, caches[f'aff{i}'] = affine_forward(out, W, b)
+            
+            # 2. Batch/Layer Normalization 
+            if self.normalization == "batchnorm":
+                gamma = self.params[f'gamma{i}']
+                beta = self.params[f'beta{i}']
+                out, caches[f'bn{i}'] = batchnorm_forward(out, gamma, beta, self.bn_params[i - 1])
+            
+            # 3. ReLU
+            out, caches[f'relu{i}'] = relu_forward(out)
+            
+            # 4. Dropout 
+            if self.use_dropout:
+                out, caches[f'drop{i}'] = dropout_forward(out, self.dropout_param)
+
+        W_last = self.params[f'W{self.num_layers}']
+        b_last = self.params[f'b{self.num_layers}']
+        scores, caches[f'aff{self.num_layers}'] = affine_forward(out, W_last, b_last)
 
         ############################################################################
         #                             END OF YOUR CODE                             #
@@ -307,7 +339,40 @@ class FullyConnectedNet(object):
         # automated tests, make sure that your L2 regularization includes a factor #
         # of 0.5 to simplify the expression for the gradient.                      #
         ############################################################################
+        data_loss, dout = softmax_loss(scores, y)
 
+        reg_loss = 0.0
+        for i in range(1, self.num_layers + 1):
+            W = self.params[f'W{i}']
+            reg_loss += 0.5 * self.reg * np.sum(W * W)
+
+        loss = data_loss + reg_loss
+
+        dout, dW, db = affine_backward(dout, caches[f'aff{self.num_layers}'])
+        grads[f'W{self.num_layers}'] = dW + self.reg * self.params[f'W{self.num_layers}']
+        grads[f'b{self.num_layers}'] = db
+
+       
+        for i in range(self.num_layers - 1, 0, -1):
+            # Dropout backward 
+            if self.use_dropout:
+                dout = dropout_backward(dout, caches[f'drop{i}'])
+
+            # ReLU backward
+            dout = relu_backward(dout, caches[f'relu{i}'])
+
+            # BatchNorm backward
+            if self.normalization == "batchnorm":
+                dout, dgamma, dbeta = batchnorm_backward(dout, caches[f'bn{i}'])
+                grads[f'gamma{i}'] = dgamma
+                grads[f'beta{i}'] = dbeta
+
+            # Affine backward
+            dout, dW, db = affine_backward(dout, caches[f'aff{i}'])
+            grads[f'W{i}'] = dW + self.reg * self.params[f'W{i}']
+            grads[f'b{i}'] = db
+
+        return loss, grads
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
